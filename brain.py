@@ -1,6 +1,6 @@
 """
-Jarvis - Steps 1-6: Brain + Voice + Wake Word + Memory + Typed Input
-----------------------------------------------------------------------------
+Jarvis - Steps 1-7: Brain + Voice + Wake Word + Memory + Typed Input + To-Do List
+-----------------------------------------------------------------------------------
 A local, free, JARVIS-style assistant. This version can:
   - Think using a local LLM (Ollama)
   - Speak replies out loud (pyttsx3, offline)
@@ -8,6 +8,7 @@ A local, free, JARVIS-style assistant. This version can:
   - Wake up automatically when you say "Hey Jarvis" (openwakeword, offline)
   - Remember facts about you permanently across sessions (memory.json)
   - Accept typed messages at any time, as an alternative to voice (Windows only)
+  - Manage a to-do list (tasks.json)
 
 Requirements:
     1. Ollama installed + a model pulled:
@@ -16,13 +17,17 @@ Requirements:
            pip install ollama pyttsx3 faster-whisper sounddevice numpy scipy openwakeword
 
 Usage: either say "Hey Jarvis" out loud and wait for "Yes?", then speak
-your request - OR just type your message directly and press Enter, no
-wake word needed for typed messages.
+your request - OR just type your message directly and press Enter.
 
 To save a permanent memory, say or type something like:
     "Remember that I have class at 9 AM"
-    "Remember I don't like spicy food"
-It'll confirm out loud, and bring that fact into every future session.
+
+To-do list commands:
+    "Add task buy groceries"       -> adds a new task
+    "What are my tasks"            -> lists all tasks with numbers
+    "Complete task 2"              -> marks task #2 as done
+    "Delete task 2"                -> removes task #2
+(Task numbers come from what "What are my tasks" shows you.)
 """
 
 import ollama
@@ -69,6 +74,62 @@ def remember_fact(fact: str):
     facts = load_memory()
     facts.append(fact)
     save_memory(facts)
+
+
+# ---- To-Do List setup ----
+TASKS_FILE = "tasks.json"
+
+
+def load_tasks() -> list[dict]:
+    """Load saved tasks from disk. Each task is {'text': ..., 'done': bool}."""
+    if not os.path.exists(TASKS_FILE):
+        return []
+    with open(TASKS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_tasks(tasks: list[dict]):
+    with open(TASKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(tasks, f, indent=2)
+
+
+def add_task(text: str):
+    tasks = load_tasks()
+    tasks.append({"text": text, "done": False})
+    save_tasks(tasks)
+
+
+def list_tasks_text() -> str:
+    """Return a spoken-friendly summary of current tasks."""
+    tasks = load_tasks()
+    if not tasks:
+        return "You have no tasks right now."
+
+    lines = []
+    for i, task in enumerate(tasks, start=1):
+        status = "done" if task["done"] else "not done"
+        lines.append(f"{i}. {task['text']} ({status})")
+    return "Here are your tasks: " + "; ".join(lines)
+
+
+def complete_task(index_1_based: int) -> bool:
+    """Mark a task as done by its 1-based position. Returns True if successful."""
+    tasks = load_tasks()
+    if 1 <= index_1_based <= len(tasks):
+        tasks[index_1_based - 1]["done"] = True
+        save_tasks(tasks)
+        return True
+    return False
+
+
+def delete_task(index_1_based: int) -> bool:
+    """Delete a task by its 1-based position. Returns True if successful."""
+    tasks = load_tasks()
+    if 1 <= index_1_based <= len(tasks):
+        tasks.pop(index_1_based - 1)
+        save_tasks(tasks)
+        return True
+    return False
 
 
 def speak(text: str):
@@ -246,6 +307,41 @@ def chat_loop():
             messages[0] = {"role": "system", "content": build_system_prompt()}
 
             confirmation = f"Got it, I'll remember that {fact}."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        # ---- To-Do List commands ----
+        if lowered.startswith("add task ") or lowered.startswith("add a task "):
+            task_text = user_input.split("task ", 1)[1].strip()
+            add_task(task_text)
+            confirmation = f"Added to your list: {task_text}."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if "my tasks" in lowered or "my to-do" in lowered or "my todo" in lowered:
+            summary = list_tasks_text()
+            print(f"{ASSISTANT_NAME}: {summary}\n")
+            speak(summary)
+            continue
+
+        if lowered.startswith("complete task ") or lowered.startswith("finish task "):
+            number_part = user_input.split(" ")[-1]
+            if number_part.isdigit() and complete_task(int(number_part)):
+                confirmation = f"Marked task {number_part} as done."
+            else:
+                confirmation = f"I couldn't find task {number_part}."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if lowered.startswith("delete task ") or lowered.startswith("remove task "):
+            number_part = user_input.split(" ")[-1]
+            if number_part.isdigit() and delete_task(int(number_part)):
+                confirmation = f"Deleted task {number_part}."
+            else:
+                confirmation = f"I couldn't find task {number_part}."
             print(f"{ASSISTANT_NAME}: {confirmation}\n")
             speak(confirmation)
             continue
