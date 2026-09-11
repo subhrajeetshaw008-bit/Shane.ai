@@ -1,5 +1,5 @@
 """
-Jarvis - Steps 1-5: Brain + Voice Output + Voice Input + Wake Word + Memory
+Jarvis - Steps 1-6: Brain + Voice + Wake Word + Memory + Typed Input
 ----------------------------------------------------------------------------
 A local, free, JARVIS-style assistant. This version can:
   - Think using a local LLM (Ollama)
@@ -7,20 +7,19 @@ A local, free, JARVIS-style assistant. This version can:
   - Listen to your voice and transcribe it (faster-whisper "base", offline)
   - Wake up automatically when you say "Hey Jarvis" (openwakeword, offline)
   - Remember facts about you permanently across sessions (memory.json)
+  - Accept typed messages at any time, as an alternative to voice (Windows only)
 
 Requirements:
     1. Ollama installed + a model pulled:
            ollama pull phi3
     2. Python packages:
            pip install ollama pyttsx3 faster-whisper sounddevice numpy scipy openwakeword
-    3. Run:
-           python brain.py
 
-Usage: just say "Hey Jarvis" out loud, wait for it to say "Yes?", then
-speak your request. This version listens for voice only - typing isn't
-available while it's waiting for the wake word.
+Usage: either say "Hey Jarvis" out loud and wait for "Yes?", then speak
+your request - OR just type your message directly and press Enter, no
+wake word needed for typed messages.
 
-To save a permanent memory, say something like:
+To save a permanent memory, say or type something like:
     "Remember that I have class at 9 AM"
     "Remember I don't like spicy food"
 It'll confirm out loud, and bring that fact into every future session.
@@ -32,6 +31,7 @@ import numpy as np
 import sounddevice as sd
 import json
 import os
+import msvcrt  # Windows-only: lets us check for typed input without blocking
 from faster_whisper import WhisperModel
 import openwakeword
 from openwakeword.model import Model
@@ -122,15 +122,39 @@ def listen() -> str:
 
 # ---- Wake Word setup ----
 # Uses the pre-trained "hey_jarvis" model (free, offline, no training needed
-# since our assistant is named Jarvis).
-oww_model = Model(wakeword_models=["hey_jarvis"])
-WAKE_WORD_THRESHOLD = 0.5   # confidence needed to trigger (0.0-1.0)
+# since our assistant is named Jarvis). inference_framework="onnx" avoids
+# a slower fallback path and the "tflite runtime not found" warning.
+oww_model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+WAKE_WORD_THRESHOLD = 0.3   # lower = easier to trigger (was 0.5)
 WAKE_CHUNK_SAMPLES = 1280   # openwakeword expects 80ms chunks at 16kHz
+DEBUG_WAKE_SCORES = True    # prints confidence scores so we can tune this
 
 
-def wait_for_wake_word():
-    """Block until 'Hey Jarvis' is heard, listening continuously in the background."""
-    print(f'[Waiting for you to say "Hey {ASSISTANT_NAME}"...]')
+_typed_buffer = ""
+
+
+def _poll_typed_input():
+    """Non-blocking check for typed input. Returns a full line if Enter was
+    just pressed, otherwise None. Call this repeatedly in a loop."""
+    global _typed_buffer
+    if msvcrt.kbhit():
+        ch = msvcrt.getwche()  # reads one character and echoes it to screen
+        if ch in ("\r", "\n"):
+            line = _typed_buffer
+            _typed_buffer = ""
+            print()  # move to next line after Enter
+            return line
+        elif ch == "\b":  # backspace
+            _typed_buffer = _typed_buffer[:-1]
+        else:
+            _typed_buffer += ch
+    return None
+
+
+def wait_for_input():
+    """Blocks until EITHER 'Hey Jarvis' is heard OR the user types something
+    and presses Enter. Returns (text, via_voice)."""
+    print(f'[Say "Hey {ASSISTANT_NAME}", or type a message and press Enter...]')
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
@@ -143,8 +167,15 @@ def wait_for_wake_word():
             predictions = oww_model.predict(chunk)
 
             for _, score in predictions.items():
+                if DEBUG_WAKE_SCORES and score > 0.05:
+                    print(f"  (wake score: {score:.2f})")
                 if score > WAKE_WORD_THRESHOLD:
-                    return
+                    return None, True  # caller will use listen() for the command
+
+            typed_line = _poll_typed_input()
+            if typed_line is not None:
+                return typed_line, False
+
 
 def build_system_prompt() -> str:
     """Build the system prompt, injecting whatever Jarvis has learned so far."""
@@ -174,18 +205,24 @@ call him "sir" or use other formal titles.{memory_section}"""
 
 def chat_loop():
     print(f"{ASSISTANT_NAME} is online.")
-    print(f'Say "Hey {ASSISTANT_NAME}" to talk. Press Ctrl+C to exit.\n')
+    print(f'Say "Hey {ASSISTANT_NAME}" OR type a message and press Enter.')
+    print("Press Ctrl+C to exit.\n")
 
     # Conversation history - this is what gives it "memory" during the session.
     # build_system_prompt() also injects long-term facts saved across sessions.
     messages = [{"role": "system", "content": build_system_prompt()}]
 
     while True:
-        wait_for_wake_word()
-        print("[Wake word detected!]")
-        speak("Yes?")
-        user_input = listen()
-        print(f"You (spoken): {user_input}")
+        typed_text, via_voice = wait_for_input()
+
+        if via_voice:
+            print("[Wake word detected!]")
+            speak("Yes?")
+            user_input = listen()
+            print(f"You (spoken): {user_input}")
+        else:
+            user_input = typed_text.strip()
+            print(f"You (typed): {user_input}")
 
         if not user_input:
             continue
