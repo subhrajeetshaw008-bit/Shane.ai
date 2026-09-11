@@ -1,5 +1,5 @@
 """
-Jarvis - Steps 1-9: Brain + Voice + Wake Word + Memory + Typed Input + To-Do + Reminders + Scheduler
+Jarvis - Steps 1-11: Brain + Voice + Wake Word + Memory + To-Do + Reminders + Scheduler + Habits
 ----------------------------------------------------------------------------------------------------
 A local, free, JARVIS-style assistant. This version can:
   - Think using a local LLM (Ollama)
@@ -11,6 +11,7 @@ A local, free, JARVIS-style assistant. This version can:
   - Manage a to-do list (tasks.json)
   - Set time-based reminders that trigger automatically (reminders.json)
   - Generate a daily schedule from what it knows about you, as a checklist
+  - Track daily habits and streaks (habits.json)
 
 Requirements:
     1. Ollama installed + a model pulled:
@@ -38,15 +39,21 @@ speak the reminder out loud automatically when it's due.
 
 Schedule generation:
     "Plan my day" / "Create a schedule" / "Make me a schedule"
-Jarvis uses everything it remembers about you (college timings, goals,
-etc. - so save those with "Remember that..." first) to generate a
-realistic schedule and adds each item to your to-do list automatically.
+
+Habit tracking:
+    "Add habit workout"       -> starts tracking a new habit
+    "Log habit workout"       -> marks it done for today, reports streak
+    "My habits" / "My streaks" -> lists all habits with current streaks
+Streaks count consecutive days completed. If you haven't logged today
+yet, it still shows yesterday's streak instead of resetting to 0 -
+you just need to log today to keep it going.
 
 Delete/clear commands:
     "Delete memory" / "Clear memory"       -> wipes all saved facts
     "Delete tasks" / "Clear tasks"         -> wipes the to-do list
     "Delete reminders" / "Clear reminders" -> wipes all reminders
-    "Delete everything" / "Clear everything" -> wipes all three at once
+    "Delete everything" / "Clear everything" -> wipes memory, tasks,
+                                                  reminders, and habits
 """
 
 import ollama
@@ -244,6 +251,74 @@ def check_due_reminders() -> list[str]:
 def clear_reminders():
     """Wipe all reminders."""
     save_reminders([])
+
+
+# ---- Habit Tracking setup ----
+HABITS_FILE = "habits.json"
+
+
+def load_habits() -> dict:
+    """Each habit maps its name to a list of completed dates (YYYY-MM-DD)."""
+    if not os.path.exists(HABITS_FILE):
+        return {}
+    with open(HABITS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_habits(habits: dict):
+    with open(HABITS_FILE, "w", encoding="utf-8") as f:
+        json.dump(habits, f, indent=2)
+
+
+def add_habit(name: str):
+    habits = load_habits()
+    if name not in habits:
+        habits[name] = []
+        save_habits(habits)
+
+
+def log_habit(name: str) -> bool:
+    """Mark a habit as done for today. Returns False if the habit doesn't exist."""
+    habits = load_habits()
+    if name not in habits:
+        return False
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today not in habits[name]:
+        habits[name].append(today)
+        save_habits(habits)
+    return True
+
+
+def calculate_streak(name: str, habits: dict) -> int:
+    """Count consecutive days completed, ending today or yesterday."""
+    completed_dates = set(habits.get(name, []))
+    streak = 0
+    check_date = datetime.now().date()
+
+    # If today isn't logged yet, start checking from yesterday instead,
+    # so the streak doesn't reset to 0 just because today isn't done yet.
+    if check_date.strftime("%Y-%m-%d") not in completed_dates:
+        check_date -= timedelta(days=1)
+
+    while check_date.strftime("%Y-%m-%d") in completed_dates:
+        streak += 1
+        check_date -= timedelta(days=1)
+
+    return streak
+
+
+def list_habits_text() -> str:
+    """Return a spoken-friendly summary of all habits and their streaks."""
+    habits = load_habits()
+    if not habits:
+        return "You have no habits being tracked yet."
+
+    lines = []
+    for name in habits:
+        streak = calculate_streak(name, habits)
+        lines.append(f"{name}: {streak} day streak")
+    return "Here are your habits: " + "; ".join(lines)
 
 
 # ---- Schedule Generation ----
@@ -481,8 +556,9 @@ def chat_loop():
             clear_memory()
             clear_tasks()
             clear_reminders()
+            save_habits({})
             messages[0] = {"role": "system", "content": build_system_prompt()}
-            confirmation = "I've cleared your memory, tasks, and reminders."
+            confirmation = "I've cleared your memory, tasks, reminders, and habits."
             print(f"{ASSISTANT_NAME}: {confirmation}\n")
             speak(confirmation)
             continue
@@ -507,6 +583,33 @@ def chat_loop():
             confirmation = "I've cleared your to-do list."
             print(f"{ASSISTANT_NAME}: {confirmation}\n")
             speak(confirmation)
+            continue
+
+        # ---- Habit tracking commands ----
+        if lowered.startswith("add habit "):
+            habit_name = user_input.split(" ", 2)[2].strip()
+            add_habit(habit_name)
+            confirmation = f"I'll start tracking your habit: {habit_name}."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if lowered.startswith("log habit "):
+            habit_name = user_input.split(" ", 2)[2].strip()
+            if log_habit(habit_name):
+                habits = load_habits()
+                streak = calculate_streak(habit_name, habits)
+                confirmation = f"Logged {habit_name} for today. Current streak: {streak} days."
+            else:
+                confirmation = f"I don't have a habit called {habit_name} yet. Try 'add habit {habit_name}' first."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if "my habits" in lowered or "my streaks" in lowered:
+            summary = list_habits_text()
+            print(f"{ASSISTANT_NAME}: {summary}\n")
+            speak(summary)
             continue
 
         # ---- Schedule generation ----
