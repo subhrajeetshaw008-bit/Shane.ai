@@ -1,6 +1,6 @@
 """
-Jarvis - Steps 1-7: Brain + Voice + Wake Word + Memory + Typed Input + To-Do List
------------------------------------------------------------------------------------
+Jarvis - Steps 1-8: Brain + Voice + Wake Word + Memory + Typed Input + To-Do + Reminders
+--------------------------------------------------------------------------------------------
 A local, free, JARVIS-style assistant. This version can:
   - Think using a local LLM (Ollama)
   - Speak replies out loud (pyttsx3, offline)
@@ -9,6 +9,7 @@ A local, free, JARVIS-style assistant. This version can:
   - Remember facts about you permanently across sessions (memory.json)
   - Accept typed messages at any time, as an alternative to voice (Windows only)
   - Manage a to-do list (tasks.json)
+  - Set time-based reminders that trigger automatically (reminders.json)
 
 Requirements:
     1. Ollama installed + a model pulled:
@@ -27,7 +28,13 @@ To-do list commands:
     "What are my tasks"            -> lists all tasks with numbers
     "Complete task 2"              -> marks task #2 as done
     "Delete task 2"                -> removes task #2
-(Task numbers come from what "What are my tasks" shows you.)
+
+Reminder commands:
+    "Remind me to water the plants at 6 pm"
+    "Remind me to call mom at 9:30 pm"
+Jarvis checks the clock every ~4 seconds in the background and will
+speak the reminder out loud automatically when it's due - you don't
+need to ask for it.
 """
 
 import ollama
@@ -36,7 +43,9 @@ import numpy as np
 import sounddevice as sd
 import json
 import os
+import re
 import msvcrt  # Windows-only: lets us check for typed input without blocking
+from datetime import datetime, timedelta
 from faster_whisper import WhisperModel
 import openwakeword
 from openwakeword.model import Model
@@ -132,6 +141,84 @@ def delete_task(index_1_based: int) -> bool:
     return False
 
 
+# ---- Reminders setup ----
+REMINDERS_FILE = "reminders.json"
+
+
+def load_reminders() -> list[dict]:
+    """Each reminder is {'text': ..., 'remind_at': ISO datetime string, 'notified': bool}."""
+    if not os.path.exists(REMINDERS_FILE):
+        return []
+    with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_reminders(reminders: list[dict]):
+    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reminders, f, indent=2)
+
+
+def parse_time_string(time_str: str) -> datetime | None:
+    """Parse things like '6 pm', '6:30 pm', '18:00' into a datetime today
+    (or tomorrow, if that time has already passed today)."""
+    time_str = time_str.strip().lower().replace(".", "")
+    formats_to_try = ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p", "%I%p"]
+
+    for fmt in formats_to_try:
+        try:
+            parsed_time = datetime.strptime(time_str, fmt)
+            now = datetime.now()
+            candidate = now.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if candidate <= now:
+                candidate += timedelta(days=1)  # schedule for tomorrow instead
+            return candidate
+        except ValueError:
+            continue
+    return None
+
+
+def add_reminder(text: str, time_str: str) -> datetime | None:
+    """Add a reminder. Returns the scheduled datetime, or None if the time
+    couldn't be understood."""
+    remind_at = parse_time_string(time_str)
+    if remind_at is None:
+        return None
+
+    reminders = load_reminders()
+    reminders.append({
+        "text": text,
+        "remind_at": remind_at.isoformat(),
+        "notified": False,
+    })
+    save_reminders(reminders)
+    return remind_at
+
+
+def check_due_reminders() -> list[str]:
+    """Return the text of any reminders that are now due, and mark them notified."""
+    reminders = load_reminders()
+    due_texts = []
+    now = datetime.now()
+    changed = False
+
+    for reminder in reminders:
+        if not reminder["notified"]:
+            remind_at = datetime.fromisoformat(reminder["remind_at"])
+            if now >= remind_at:
+                due_texts.append(reminder["text"])
+                reminder["notified"] = True
+                changed = True
+
+    if changed:
+        save_reminders(reminders)
+    return due_texts
+
+
 def speak(text: str):
     """Make Shane.ai say the given text out loud.
 
@@ -214,8 +301,10 @@ def _poll_typed_input():
 
 def wait_for_input():
     """Blocks until EITHER 'Hey Jarvis' is heard OR the user types something
-    and presses Enter. Returns (text, via_voice)."""
+    and presses Enter. Also checks for due reminders in the background.
+    Returns (text, via_voice)."""
     print(f'[Say "Hey {ASSISTANT_NAME}", or type a message and press Enter...]')
+    loop_count = 0
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
@@ -236,6 +325,14 @@ def wait_for_input():
             typed_line = _poll_typed_input()
             if typed_line is not None:
                 return typed_line, False
+
+            # Check for due reminders roughly every 4 seconds (50 chunks * 80ms)
+            loop_count += 1
+            if loop_count % 50 == 0:
+                due = check_due_reminders()
+                for reminder_text in due:
+                    print(f"\n[Reminder!] {reminder_text}")
+                    speak(f"Reminder: {reminder_text}")
 
 
 def build_system_prompt() -> str:
@@ -311,6 +408,23 @@ def chat_loop():
             speak(confirmation)
             continue
 
+        # ---- Reminder commands ----
+        # e.g. "remind me to water the plants at 6 pm"
+        reminder_match = re.match(
+            r"remind me to (.+) at (.+)", lowered
+        )
+        if reminder_match:
+            task_text = reminder_match.group(1).strip()
+            time_text = reminder_match.group(2).strip()
+            scheduled = add_reminder(task_text, time_text)
+            if scheduled:
+                confirmation = f"Okay, I'll remind you to {task_text} at {scheduled.strftime('%I:%M %p')}."
+            else:
+                confirmation = f"I couldn't understand the time '{time_text}'. Try something like '6 pm' or '6:30 pm'."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
         # ---- To-Do List commands ----
         if lowered.startswith("add task ") or lowered.startswith("add a task "):
             task_text = user_input.split("task ", 1)[1].strip()
@@ -361,3 +475,4 @@ def chat_loop():
 
 if __name__ == "__main__":
     chat_loop()
+    
