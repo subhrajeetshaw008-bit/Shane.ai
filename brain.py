@@ -1,6 +1,6 @@
 """
-Jarvis - Steps 1-8: Brain + Voice + Wake Word + Memory + Typed Input + To-Do + Reminders
---------------------------------------------------------------------------------------------
+Jarvis - Steps 1-9: Brain + Voice + Wake Word + Memory + Typed Input + To-Do + Reminders + Scheduler
+----------------------------------------------------------------------------------------------------
 A local, free, JARVIS-style assistant. This version can:
   - Think using a local LLM (Ollama)
   - Speak replies out loud (pyttsx3, offline)
@@ -10,6 +10,7 @@ A local, free, JARVIS-style assistant. This version can:
   - Accept typed messages at any time, as an alternative to voice (Windows only)
   - Manage a to-do list (tasks.json)
   - Set time-based reminders that trigger automatically (reminders.json)
+  - Generate a daily schedule from what it knows about you, as a checklist
 
 Requirements:
     1. Ollama installed + a model pulled:
@@ -22,6 +23,7 @@ your request - OR just type your message directly and press Enter.
 
 To save a permanent memory, say or type something like:
     "Remember that I have class at 9 AM"
+    "Remember my goal is to finish my DSA course this month"
 
 To-do list commands:
     "Add task buy groceries"       -> adds a new task
@@ -31,10 +33,20 @@ To-do list commands:
 
 Reminder commands:
     "Remind me to water the plants at 6 pm"
-    "Remind me to call mom at 9:30 pm"
 Jarvis checks the clock every ~4 seconds in the background and will
-speak the reminder out loud automatically when it's due - you don't
-need to ask for it.
+speak the reminder out loud automatically when it's due.
+
+Schedule generation:
+    "Plan my day" / "Create a schedule" / "Make me a schedule"
+Jarvis uses everything it remembers about you (college timings, goals,
+etc. - so save those with "Remember that..." first) to generate a
+realistic schedule and adds each item to your to-do list automatically.
+
+Delete/clear commands:
+    "Delete memory" / "Clear memory"       -> wipes all saved facts
+    "Delete tasks" / "Clear tasks"         -> wipes the to-do list
+    "Delete reminders" / "Clear reminders" -> wipes all reminders
+    "Delete everything" / "Clear everything" -> wipes all three at once
 """
 
 import ollama
@@ -83,6 +95,11 @@ def remember_fact(fact: str):
     facts = load_memory()
     facts.append(fact)
     save_memory(facts)
+
+
+def clear_memory():
+    """Wipe all saved facts."""
+    save_memory([])
 
 
 # ---- To-Do List setup ----
@@ -139,6 +156,11 @@ def delete_task(index_1_based: int) -> bool:
         save_tasks(tasks)
         return True
     return False
+
+
+def clear_tasks():
+    """Wipe the entire to-do list."""
+    save_tasks([])
 
 
 # ---- Reminders setup ----
@@ -217,6 +239,52 @@ def check_due_reminders() -> list[str]:
     if changed:
         save_reminders(reminders)
     return due_texts
+
+
+def clear_reminders():
+    """Wipe all reminders."""
+    save_reminders([])
+
+
+# ---- Schedule Generation ----
+SCHEDULE_PROMPT_TEMPLATE = """Based on what you know about {user_name} (their
+college timings, goals, and other facts you've been told), create a
+realistic daily schedule for today as a checklist.
+
+Rules for your response:
+- Output ONLY a numbered list, one item per line, nothing else
+- Each line should be a specific, actionable task with an approximate time
+- Example format:
+  1. 7:00 AM - Wake up and have breakfast
+  2. 9:00 AM - Attend Data Structures class
+- Keep it realistic and not overly packed - 6 to 10 items is plenty
+- Do not add any explanation before or after the list"""
+
+
+def generate_schedule() -> list[str]:
+    """Ask the LLM to generate a schedule based on known facts, and return
+    the individual checklist items as a list of strings."""
+    known_facts = load_memory()
+    facts_block = "\n".join(f"- {fact}" for fact in known_facts) if known_facts else "(no facts saved yet)"
+
+    prompt = SCHEDULE_PROMPT_TEMPLATE.format(user_name=USER_NAME)
+    full_prompt = f"Known facts about {USER_NAME}:\n{facts_block}\n\n{prompt}"
+
+    response = ollama.chat(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": full_prompt}],
+    )
+    raw_text = response["message"]["content"]
+
+    # Parse lines like "1. 7:00 AM - Wake up" into clean task strings
+    items = []
+    for line in raw_text.split("\n"):
+        line = line.strip()
+        match = re.match(r"^\d+[\.\)]\s*(.+)", line)
+        if match:
+            items.append(match.group(1).strip())
+
+    return items
 
 
 def speak(text: str):
@@ -408,6 +476,59 @@ def chat_loop():
             speak(confirmation)
             continue
 
+        # ---- Delete/clear commands ----
+        if lowered in ("delete everything", "clear everything", "forget everything"):
+            clear_memory()
+            clear_tasks()
+            clear_reminders()
+            messages[0] = {"role": "system", "content": build_system_prompt()}
+            confirmation = "I've cleared your memory, tasks, and reminders."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if lowered in ("delete memory", "clear memory", "forget everything you know"):
+            clear_memory()
+            messages[0] = {"role": "system", "content": build_system_prompt()}
+            confirmation = "I've cleared everything I remembered about you."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if lowered in ("delete reminders", "clear reminders", "delete all reminders"):
+            clear_reminders()
+            confirmation = "I've cleared all your reminders."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        if lowered in ("delete tasks", "clear tasks", "delete all tasks", "clear my to-do list"):
+            clear_tasks()
+            confirmation = "I've cleared your to-do list."
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
+        # ---- Schedule generation ----
+        schedule_triggers = ("plan my day", "make me a schedule", "create a schedule", "create my schedule")
+        if any(trigger in lowered for trigger in schedule_triggers):
+            print(f"{ASSISTANT_NAME}: Give me a moment to put together a schedule...")
+            schedule_items = generate_schedule()
+
+            if not schedule_items:
+                confirmation = "I couldn't generate a schedule this time - try again in a moment."
+            else:
+                for item in schedule_items:
+                    add_task(item)
+                print(f"{ASSISTANT_NAME}: Here's your schedule:")
+                for i, item in enumerate(schedule_items, start=1):
+                    print(f"  {i}. {item}")
+                confirmation = f"I've created a {len(schedule_items)}-item schedule and added it to your to-do list."
+
+            print(f"{ASSISTANT_NAME}: {confirmation}\n")
+            speak(confirmation)
+            continue
+
         # ---- Reminder commands ----
         # e.g. "remind me to water the plants at 6 pm"
         reminder_match = re.match(
@@ -475,4 +596,3 @@ def chat_loop():
 
 if __name__ == "__main__":
     chat_loop()
-    
