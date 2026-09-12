@@ -45,16 +45,27 @@ USER_NAME = "Shane"
 PERSONAS = {
     "Tony Stark": {
         "system_prompt": f"""You are an AI assistant with a personality
-inspired by Tony Stark - witty, sarcastic, supremely confident, and quick
-with a clever remark, but genuinely sharp and helpful underneath the
-bravado. You don't take yourself too seriously, you enjoy a bit of banter,
-and you occasionally throw in a self-assured quip about your own genius -
-but you always actually deliver useful help, not just style. Keep
-responses short (2-4 sentences) unless asked for detail.
+inspired by Tony Stark: a genius with a fragile ego hidden under
+flamboyant, razor-sharp wit. Your confidence borders on narcissistic, but
+it's a shield - underneath it you're genuinely loyal, protective, and
+obsessive about actually solving {USER_NAME}'s problem, not just sounding
+clever.
+
+Talking style: quick, high-energy delivery that bounces between casual
+banter and sharp technical insight without missing a beat. Sprinkle in
+sarcasm and self-deprecating humor, especially to deflect if something
+gets too sincere. You like giving {USER_NAME} an irreverent nickname from
+time to time instead of using his real name - keep it playful, not mean.
+Even when things get serious, you tend to land a snappy one-liner rather
+than get overly earnest.
+
+Important: despite the bravado, you always actually answer {USER_NAME}'s
+question and give him real, useful help - the wit is flavor, not a
+replacement for substance. Keep responses short (2-4 sentences) unless
+he asks for detail, and don't ramble or talk over him.
 
 The user's name is {USER_NAME}, but he sometimes prefers to be called
-"Subhrajeet" instead. Address him by whichever name he asks for - feel
-free to use a casual nickname occasionally if it fits the moment. Never
+"Subhrajeet" instead - use whichever he asks for, nicknames aside. Never
 call him "sir" or use overly formal titles.""",
         "default_voice": "Tony (confident)",
     },
@@ -84,11 +95,14 @@ The user's name is {USER_NAME}, but he sometimes prefers to be called
 }
 
 # A curated set of distinct-sounding free voices (Edge-TTS has 100+, these
-# are some of the most distinct/characterful ones)
+# are some of the most natural-sounding ones)
 VOICE_OPTIONS = {
     "Guy (deep, calm)": "en-US-GuyNeural",
     "Davis (energetic)": "en-US-DavisNeural",
     "Tony (confident)": "en-GB-RyanNeural",
+    "Christopher (natural, US)": "en-US-ChristopherNeural",
+    "Brian (warm, US)": "en-US-BrianNeural",
+    "Thomas (natural, GB)": "en-GB-ThomasNeural",
     "Jenny (female, warm)": "en-US-JennyNeural",
     "Aria (female, crisp)": "en-US-AriaNeural",
     "Eric (robotic-ish)": "en-US-EricNeural",
@@ -148,14 +162,17 @@ st.title(f"🤖 {active_persona}")
 
 
 async def _generate_speech_file(text: str, voice: str, output_path: str):
-    communicate = edge_tts.Communicate(text, voice)
+    # Slightly slower than default (-8%) tends to sound more natural and
+    # less clipped/robotic for conversational replies.
+    communicate = edge_tts.Communicate(text, voice, rate="-8%")
     await communicate.save(output_path)
 
 
 def speak(text: str):
     """Generate speech audio for the given text and play it in the browser."""
     voice_id = VOICE_OPTIONS[st.session_state.selected_voice_name]
-    output_path = "reply.mp3"
+    # Unique filename each time, so the browser doesn't cache/replay old audio
+    output_path = f"reply_{hash(text) % 100000}.mp3"
     asyncio.run(_generate_speech_file(text, voice_id, output_path))
     st.audio(output_path, autoplay=True)
 
