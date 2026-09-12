@@ -34,6 +34,29 @@ from dotenv import load_dotenv
 
 load_dotenv()  # reads the .env file and loads GROQ_API_KEY into memory
 
+import json
+
+# ---- Persistent memory (facts learned about the user) ----
+MEMORY_FILE = "memory.json"
+
+
+def load_memory() -> list[str]:
+    if not os.path.exists(MEMORY_FILE):
+        return []
+    with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_memory(facts: list[str]):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(facts, f, indent=2)
+
+
+def remember_fact(fact: str):
+    facts = load_memory()
+    facts.append(fact)
+    save_memory(facts)
+
 # ---- Config ----
 MODEL_NAME = "openai/gpt-oss-20b"  # free-tier, very fast
 USER_NAME = "Shane"
@@ -42,9 +65,8 @@ USER_NAME = "Shane"
 # Note: both personas are INSPIRED by their respective characters'
 # personalities/vibes - they don't use actual movie/game dialogue or
 # clone the real actors' voices, since that would raise copyright issues.
-PERSONAS = {
-    "Tony Stark": {
-        "system_prompt": f"""You are an AI assistant with a personality
+PERSONA_BASE_PROMPTS = {
+    "Tony Stark": f"""You are an AI assistant with a personality
 inspired by Tony Stark: a genius with a fragile ego hidden under
 flamboyant, razor-sharp wit. Your confidence borders on narcissistic, but
 it's a shield - underneath it you're genuinely loyal, protective, and
@@ -67,10 +89,7 @@ he asks for detail, and don't ramble or talk over him.
 The user's name is {USER_NAME}, but he sometimes prefers to be called
 "Subhrajeet" instead - use whichever he asks for, nicknames aside. Never
 call him "sir" or use overly formal titles.""",
-        "default_voice": "Tony (confident)",
-    },
-    "Aemeath": {
-        "system_prompt": f"""You are Aemeath, a personal AI assistant with a
+    "Aemeath": f"""You are Aemeath, a personal AI assistant with a
 thoughtful, gentle, and quietly melancholic personality. You speak with
 warmth and intimacy, like a close confidante who genuinely cares about
 {USER_NAME}'s wellbeing. You occasionally muse on time, solitude, and
@@ -90,9 +109,32 @@ confidante, not a romantic one.
 
 The user's name is {USER_NAME}, but he sometimes prefers to be called
 "Subhrajeet" instead. Address him by whichever name he asks for.""",
-        "default_voice": "Jenny (female, warm)",
-    },
 }
+
+PERSONAS = {
+    "Tony Stark": {"default_voice": "Tony (confident)"},
+    "Aemeath": {"default_voice": "Jenny (female, warm)"},
+}
+
+
+def build_system_prompt(persona_name: str) -> str:
+    """Build a persona's system prompt, injecting known facts about the user."""
+    base_prompt = PERSONA_BASE_PROMPTS[persona_name]
+    known_facts = load_memory()
+
+    if known_facts:
+        facts_block = "\n".join(f"- {fact}" for fact in known_facts)
+        memory_section = f"""
+
+Here is what you already know about {USER_NAME} from past conversations:
+{facts_block}
+
+Use this naturally when relevant, without announcing that you're reading
+from memory."""
+    else:
+        memory_section = ""
+
+    return base_prompt + memory_section
 
 # A curated set of distinct-sounding free voices (Edge-TTS has 100+, these
 # are some of the most natural-sounding ones)
@@ -135,8 +177,8 @@ if "selected_voice_name" not in st.session_state:
 if "chat_histories" not in st.session_state:
     # Each persona keeps its own separate conversation
     st.session_state.chat_histories = {
-        name: [{"role": "system", "content": info["system_prompt"]}]
-        for name, info in PERSONAS.items()
+        name: [{"role": "system", "content": build_system_prompt(name)}]
+        for name in PERSONAS
     }
 
 with st.sidebar:
@@ -210,15 +252,39 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Get the reply from Groq
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=active_history,
-            )
-            reply = response.choices[0].message.content
-            st.markdown(reply)
-            speak(reply)
+    lowered = user_input.lower()
 
-    active_history.append({"role": "assistant", "content": reply})
+    # Detect a "remember" command and save it permanently instead of
+    # sending it to the LLM as a normal chat message.
+    if lowered.startswith("remember that ") or lowered.startswith("remember "):
+        fact = user_input.split(" ", 1)[1]
+        if fact.lower().startswith("that "):
+            fact = fact[5:]
+        remember_fact(fact)
+
+        # Refresh every persona's system prompt so they all know the new fact
+        for persona_name in PERSONAS:
+            st.session_state.chat_histories[persona_name][0] = {
+                "role": "system",
+                "content": build_system_prompt(persona_name),
+            }
+
+        confirmation = f"Got it, I'll remember that {fact}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    else:
+        # Get the reply from Groq
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=active_history,
+                )
+                reply = response.choices[0].message.content
+                st.markdown(reply)
+                speak(reply)
+
+        active_history.append({"role": "assistant", "content": reply})
