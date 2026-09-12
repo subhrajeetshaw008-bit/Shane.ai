@@ -95,9 +95,16 @@ VOICE_OPTIONS = {
 st.set_page_config(page_title="Jarvis", page_icon="🤖")
 
 # ---- Groq client ----
+# Works both locally (.env file) and on Streamlit Cloud (Secrets manager)
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    st.error("No GROQ_API_KEY found. Make sure your .env file is set up correctly.")
+    try:
+        api_key = st.secrets["GROQ_API_KEY"]
+    except Exception:
+        api_key = None
+
+if not api_key:
+    st.error("No GROQ_API_KEY found. Add it to your .env file (local) or Streamlit Secrets (cloud).")
     st.stop()
 
 client = Groq(api_key=api_key)
