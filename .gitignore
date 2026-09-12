@@ -3,3 +3,7 @@ tasks.json
 reminders.json
 habits.json
 __pycache__/
+
+.env
+
+reply.mp3
