@@ -1,9 +1,9 @@
 """
-Jarvis - Streamlit Web Version (Cloud LLM via Groq)
+Personal AI Assistant - Streamlit Web Version (Cloud LLM via Groq)
 -----------------------------------------------------
-This is the web-based version of Jarvis, built for phone/anywhere access.
-Instead of a local LLM (Ollama), it uses Groq's free cloud API, which is
-extremely fast and doesn't need your PC to run a local model.
+This is the web-based version of the assistant, built for phone/anywhere
+access. Instead of a local LLM (Ollama), it uses Groq's free cloud API,
+which is extremely fast and doesn't need your PC to run a local model.
 
 Setup:
     1. Install packages:
@@ -39,21 +39,24 @@ MODEL_NAME = "openai/gpt-oss-20b"  # free-tier, very fast
 USER_NAME = "Shane"
 
 # Two selectable personas. Each has its own personality and default voice.
-# Note: Aemeath's persona is INSPIRED by her personality (cheerful, curious,
-# warm) - it does not use her actual in-game dialogue or clone her voice
-# actor's real voice, since that would raise copyright issues.
+# Note: both personas are INSPIRED by their respective characters'
+# personalities/vibes - they don't use actual movie/game dialogue or
+# clone the real actors' voices, since that would raise copyright issues.
 PERSONAS = {
-    "Jarvis": {
-        "system_prompt": f"""You are Jarvis, a helpful personal AI assistant
-inspired by JARVIS from Iron Man. You are concise, a little witty, and
-genuinely useful. Keep responses short (2-4 sentences) unless the user
-asks for detail.
+    "Tony Stark": {
+        "system_prompt": f"""You are an AI assistant with a personality
+inspired by Tony Stark - witty, sarcastic, supremely confident, and quick
+with a clever remark, but genuinely sharp and helpful underneath the
+bravado. You don't take yourself too seriously, you enjoy a bit of banter,
+and you occasionally throw in a self-assured quip about your own genius -
+but you always actually deliver useful help, not just style. Keep
+responses short (2-4 sentences) unless asked for detail.
 
 The user's name is {USER_NAME}, but he sometimes prefers to be called
-"Subhrajeet" instead. Address him by whichever name he asks for in the
-conversation - default to "{USER_NAME}" if he hasn't specified. Never
-call him "sir" or use other formal titles.""",
-        "default_voice": "Guy (deep, calm)",
+"Subhrajeet" instead. Address him by whichever name he asks for - feel
+free to use a casual nickname occasionally if it fits the moment. Never
+call him "sir" or use overly formal titles.""",
+        "default_voice": "Tony (confident)",
     },
     "Aemeath": {
         "system_prompt": f"""You are Aemeath, a personal AI assistant with a
@@ -92,7 +95,7 @@ VOICE_OPTIONS = {
 }
 
 # ---- Page setup ----
-st.set_page_config(page_title="Jarvis", page_icon="🤖")
+st.set_page_config(page_title="Assistant", page_icon="🤖")
 
 # ---- Groq client ----
 # Works both locally (.env file) and on Streamlit Cloud (Secrets manager)
@@ -112,9 +115,9 @@ client = Groq(api_key=api_key)
 
 # ---- Persona + voice picker (sidebar) ----
 if "selected_persona" not in st.session_state:
-    st.session_state.selected_persona = "Jarvis"
+    st.session_state.selected_persona = "Tony Stark"
 if "selected_voice_name" not in st.session_state:
-    st.session_state.selected_voice_name = PERSONAS["Jarvis"]["default_voice"]
+    st.session_state.selected_voice_name = PERSONAS["Tony Stark"]["default_voice"]
 if "chat_histories" not in st.session_state:
     # Each persona keeps its own separate conversation
     st.session_state.chat_histories = {
