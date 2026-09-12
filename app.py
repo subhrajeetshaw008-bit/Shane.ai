@@ -30,11 +30,14 @@ import os
 import asyncio
 import edge_tts
 from audio_recorder_streamlit import audio_recorder
+from streamlit_autorefresh import st_autorefresh
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()  # reads the .env file and loads GROQ_API_KEY into memory
 
 import json
+import re
 
 # ---- Persistent memory (facts learned about the user) ----
 MEMORY_FILE = "memory.json"
@@ -181,6 +184,42 @@ if "chat_histories" not in st.session_state:
         for name in PERSONAS
     }
 
+async def _generate_speech_file(text: str, voice: str, output_path: str):
+    # Slightly slower than default (-8%) tends to sound more natural and
+    # less clipped/robotic for conversational replies.
+    communicate = edge_tts.Communicate(text, voice, rate="-8%")
+    await communicate.save(output_path)
+
+
+def speak(text: str):
+    """Generate speech audio for the given text and play it in the browser."""
+    voice_id = VOICE_OPTIONS[st.session_state.selected_voice_name]
+    # Unique filename each time, so the browser doesn't cache/replay old audio
+    output_path = f"reply_{hash(text) % 100000}.mp3"
+    asyncio.run(_generate_speech_file(text, voice_id, output_path))
+    st.audio(output_path, autoplay=True)
+
+
+# ---- Pomodoro Technique settings ----
+SHORT_BREAK_MINUTES = 5
+LONG_BREAK_MINUTES = 15
+CYCLES_BEFORE_LONG_BREAK = 4
+
+if "pomodoro_phase" not in st.session_state:
+    st.session_state.pomodoro_phase = None  # None, "work", "short_break", "long_break"
+    st.session_state.pomodoro_end_time = None
+    st.session_state.pomodoro_cycles_completed = 0
+    st.session_state.pomodoro_work_minutes = 25
+
+
+def start_pomodoro_phase(phase: str, minutes: int):
+    st.session_state.pomodoro_phase = phase
+    st.session_state.pomodoro_end_time = datetime.now() + timedelta(minutes=minutes)
+
+
+PHASE_LABELS = {"work": "Focus", "short_break": "Short Break", "long_break": "Long Break"}
+
+
 with st.sidebar:
     st.header("Assistant Settings")
     new_persona = st.selectbox(
@@ -199,24 +238,50 @@ with st.sidebar:
         index=list(VOICE_OPTIONS.keys()).index(st.session_state.selected_voice_name),
     )
 
+    # ---- Pomodoro Timer ----
+    st.header("Pomodoro Timer")
+
+    if st.session_state.pomodoro_phase is None:
+        work_minutes_input = st.number_input(
+            "Work minutes", min_value=5, max_value=120,
+            value=st.session_state.pomodoro_work_minutes, step=5,
+        )
+        if st.button("Start Pomodoro"):
+            st.session_state.pomodoro_work_minutes = work_minutes_input
+            start_pomodoro_phase("work", work_minutes_input)
+            st.rerun()
+        if st.session_state.pomodoro_cycles_completed > 0:
+            st.caption(f"Completed {st.session_state.pomodoro_cycles_completed} work session(s) so far.")
+    else:
+        remaining = st.session_state.pomodoro_end_time - datetime.now()
+        phase = st.session_state.pomodoro_phase
+
+        if remaining.total_seconds() > 0:
+            st_autorefresh(interval=1000, key="pomodoro_refresh")
+            minutes_left, seconds_left = divmod(int(remaining.total_seconds()), 60)
+            st.metric(f"{PHASE_LABELS[phase]} - Time remaining", f"{minutes_left:02d}:{seconds_left:02d}")
+            if st.button("Stop Pomodoro"):
+                st.session_state.pomodoro_phase = None
+                st.session_state.pomodoro_end_time = None
+                st.rerun()
+        else:
+            # Current phase just ended - transition to the next one automatically
+            if phase == "work":
+                st.session_state.pomodoro_cycles_completed += 1
+                if st.session_state.pomodoro_cycles_completed % CYCLES_BEFORE_LONG_BREAK == 0:
+                    speak(f"Great work! That's {CYCLES_BEFORE_LONG_BREAK} sessions done - time for a longer {LONG_BREAK_MINUTES} minute break.")
+                    start_pomodoro_phase("long_break", LONG_BREAK_MINUTES)
+                else:
+                    speak(f"Focus session complete! Take a {SHORT_BREAK_MINUTES} minute break.")
+                    start_pomodoro_phase("short_break", SHORT_BREAK_MINUTES)
+            else:
+                speak("Break's over - back to work!")
+                start_pomodoro_phase("work", st.session_state.pomodoro_work_minutes)
+            st.rerun()
+
 active_persona = st.session_state.selected_persona
 st.title(f"🤖 {active_persona}")
 
-
-async def _generate_speech_file(text: str, voice: str, output_path: str):
-    # Slightly slower than default (-8%) tends to sound more natural and
-    # less clipped/robotic for conversational replies.
-    communicate = edge_tts.Communicate(text, voice, rate="-8%")
-    await communicate.save(output_path)
-
-
-def speak(text: str):
-    """Generate speech audio for the given text and play it in the browser."""
-    voice_id = VOICE_OPTIONS[st.session_state.selected_voice_name]
-    # Unique filename each time, so the browser doesn't cache/replay old audio
-    output_path = f"reply_{hash(text) % 100000}.mp3"
-    asyncio.run(_generate_speech_file(text, voice_id, output_path))
-    st.audio(output_path, autoplay=True)
 
 # ---- Conversation history (persists during this browser session, per persona) ----
 active_history = st.session_state.chat_histories[active_persona]
@@ -270,6 +335,18 @@ if user_input:
             }
 
         confirmation = f"Got it, I'll remember that {fact}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif re.search(r"(start|begin).*(focus session|pomodoro)", lowered):
+        minutes_match = re.search(r"(\d+)\s*minute", lowered)
+        minutes = int(minutes_match.group(1)) if minutes_match else 25
+        st.session_state.pomodoro_work_minutes = minutes
+        start_pomodoro_phase("work", minutes)
+
+        confirmation = f"Starting a {minutes}-minute Pomodoro session. I'll walk you through the breaks too."
         with st.chat_message("assistant"):
             st.markdown(confirmation)
             speak(confirmation)
