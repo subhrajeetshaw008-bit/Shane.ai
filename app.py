@@ -7,7 +7,7 @@ extremely fast and doesn't need your PC to run a local model.
 
 Setup:
     1. Install packages:
-           pip install streamlit groq python-dotenv edge-tts
+           pip install streamlit groq python-dotenv edge-tts audio-recorder-streamlit
     2. Create a .env file in this folder with:
            GROQ_API_KEY=your_actual_key_here
     3. Run:
@@ -16,8 +16,12 @@ Setup:
        on the same WiFi, use the "Network URL" Streamlit prints in the
        terminal instead of "localhost".
 
-Voice: pick from several distinct voices in the sidebar. Replies are
-spoken out loud automatically using Edge-TTS (free, needs internet).
+Voice output: pick from several distinct voices in the sidebar. Replies
+are spoken out loud automatically using Edge-TTS (free, needs internet).
+
+Voice input: click the microphone icon next to the text box to record,
+click again to stop. It transcribes using Groq's free Whisper API and
+sends it just like a typed message.
 """
 
 import streamlit as st
@@ -25,6 +29,7 @@ from groq import Groq
 import os
 import asyncio
 import edge_tts
+from audio_recorder_streamlit import audio_recorder
 from dotenv import load_dotenv
 
 load_dotenv()  # reads the .env file and loads GROQ_API_KEY into memory
@@ -152,8 +157,25 @@ for message in active_history[1:]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# ---- Chat input ----
-user_input = st.chat_input("Type a message...")
+# ---- Chat input (typed or spoken) ----
+col1, col2 = st.columns([5, 1])
+with col1:
+    typed_input = st.chat_input("Type a message...")
+with col2:
+    audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
+
+user_input = typed_input
+
+# If a new voice recording came in (different from the last one we processed),
+# transcribe it using Groq's free Whisper API and use it as the input instead.
+if audio_bytes and audio_bytes != st.session_state.get("last_audio_bytes"):
+    st.session_state.last_audio_bytes = audio_bytes
+    with st.spinner("Transcribing..."):
+        transcription = client.audio.transcriptions.create(
+            file=("recording.wav", audio_bytes),
+            model="whisper-large-v3-turbo",
+        )
+        user_input = transcription.text.strip()
 
 if user_input:
     # Show the user's message immediately
