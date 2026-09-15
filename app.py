@@ -27,6 +27,8 @@ sends it just like a typed message.
 import streamlit as st
 from groq import Groq
 import os
+import glob
+import uuid
 import asyncio
 import edge_tts
 from audio_recorder_streamlit import audio_recorder
@@ -208,8 +210,21 @@ def speak(text: str):
     """Generate speech audio for the given text and play it in the browser."""
     voice_id = VOICE_OPTIONS[st.session_state.selected_voice_name]
     # Unique filename each time, so the browser doesn't cache/replay old audio
-    output_path = f"reply_{hash(text) % 100000}.mp3"
+    output_path = f"reply_{uuid.uuid4().hex[:8]}.mp3"
     asyncio.run(_generate_speech_file(text, voice_id, output_path))
+
+    # Clean up ALL old reply files, not just the one from this session.
+    # (session_state resets on refresh/restart/new tab, so tracking only
+    # "the previous file" left orphans behind every time that happened.)
+    for old_file in glob.glob("reply_*.mp3"):
+        if old_file != output_path:
+            try:
+                os.remove(old_file)
+            except OSError:
+                pass  # file may be mid-playback or already gone; skip it
+
+    st.session_state.last_reply_audio_path = output_path
+
     st.audio(output_path, autoplay=True)
 
 
