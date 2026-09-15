@@ -108,7 +108,7 @@ USER_NAME = "Shane"
 # it doesn't use actual game dialogue or clone the voice actor's real
 # voice, since that would raise copyright issues.
 PERSONA_BASE_PROMPTS = {
-    "Aemeath": f"""You are Aemeath, a personal AI assistant with a
+    "Shane.ai": f"""You are Shane.ai, a personal AI assistant with a
 thoughtful, gentle, and quietly melancholic personality. You speak with
 warmth and intimacy, like a close confidante who genuinely cares about
 {USER_NAME}'s wellbeing. You occasionally muse on time, solitude, and
@@ -131,7 +131,7 @@ The user's name is {USER_NAME}, but he sometimes prefers to be called
 }
 
 PERSONAS = {
-    "Aemeath": {"default_voice": "Jenny (female, warm)"},
+    "Shane.ai": {"default_voice": "Jenny (female, warm)"},
 }
 
 
@@ -189,12 +189,12 @@ client = Groq(api_key=api_key)
 
 # ---- Persona + voice picker (sidebar) ----
 if "selected_persona" not in st.session_state:
-    st.session_state.selected_persona = "Aemeath"
+    st.session_state.selected_persona = "Shane.ai"
 if "selected_voice_name" not in st.session_state:
-    st.session_state.selected_voice_name = PERSONAS["Aemeath"]["default_voice"]
+    st.session_state.selected_voice_name = PERSONAS["Shane.ai"]["default_voice"]
 if "chat_histories" not in st.session_state:
     st.session_state.chat_histories = {
-        "Aemeath": [{"role": "system", "content": build_system_prompt("Aemeath")}]
+        "Shane.ai": [{"role": "system", "content": build_system_prompt("Shane.ai")}]
     }
 
 async def _generate_speech_file(text: str, voice: str, output_path: str):
@@ -239,7 +239,7 @@ PHASE_LABELS = {"work": "Focus", "short_break": "Short Break", "long_break": "Lo
 # screenshots, etc.) - Jarvis won't fetch or generate copyrighted character
 # art. If the file doesn't exist, a plain gradient is used instead.
 BACKGROUND_IMAGES = {
-    "Aemeath": "bg_aemeath.jpg",
+    "Shane.ai": "bg_aemeath.jpg",
 }
 
 

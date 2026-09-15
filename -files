@@ -1,0 +1,20 @@
+[33m3409c16[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Basic changes
+[33mb1c45f6[m Add full Pomodoro cycle (work/short break/long break) with auto-progression
+[33m8c7ffcb[m Port memory system to Streamlit app, shared across personas
+[33mf9786e9[m Improve voice quality: more options, slower rate, fix audio caching bug
+[33m54540eb[m Replace Jarvis persona with Tony Stark-inspired persona
+[33m2e2e6b4[m Fix requirements.txt - remove Windows-only and unused local packages
+[33mad1fbbf[m Support Streamlit Cloud secrets for API key
+[33m0c72e2f[m Add voice input via mic recorder + Groq Whisper transcription
+[33m6ddf683[m Add Streamlit web app with Groq cloud LLM, voice output, and dual personas
+[33m01a575e[m Add habit tracking (streaks)
+[33m999c91b[m Fix gitignore properly, untrack personal files
+[33mac41dfb[m Add schedule generation (plan my day) + delete/clear commands
+[33m603034d[m Stop tracking personal data files (memory, tasks, reminders)
+[33m5b709db[m Add time-based reminders (auto-triggers in background)
+[33ma3d2faa[m Add to-do list feature (add, list, complete, delete tasks)
+[33m53d5708[m Add typed input support + improve wake word reliability
+[33m868a9d4[m Add persistent memory system - Jarvis remembers facts across sessions
+[33mad7feff[m Add wake word detection (Hey Jarvis) + improve STT accuracy
+[33m56691db[m Add offline text-to-speech (Shane.ai now speaks replies)
+[33ma36789b[m Initial commit: Shane.ai brain (text chat with local LLM)
