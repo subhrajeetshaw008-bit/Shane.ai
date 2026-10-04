@@ -27,8 +27,6 @@ sends it just like a typed message.
 import streamlit as st
 from groq import Groq
 import os
-import glob
-import uuid
 import asyncio
 import edge_tts
 from audio_recorder_streamlit import audio_recorder
@@ -61,6 +59,188 @@ def remember_fact(fact: str):
     facts = load_memory()
     facts.append(fact)
     save_memory(facts)
+
+
+def clear_memory():
+    save_memory([])
+
+
+# ---- To-Do List ----
+TASKS_FILE = "tasks.json"
+
+
+def load_tasks() -> list[dict]:
+    if not os.path.exists(TASKS_FILE):
+        return []
+    with open(TASKS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_tasks(tasks: list[dict]):
+    with open(TASKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(tasks, f, indent=2)
+
+
+def add_task(text: str):
+    tasks = load_tasks()
+    tasks.append({"text": text, "done": False})
+    save_tasks(tasks)
+
+
+def list_tasks_text() -> str:
+    tasks = load_tasks()
+    if not tasks:
+        return "You have no tasks right now."
+    lines = []
+    for i, task in enumerate(tasks, start=1):
+        status = "done" if task["done"] else "not done"
+        lines.append(f"{i}. {task['text']} ({status})")
+    return "Here are your tasks: " + "; ".join(lines)
+
+
+def complete_task(index_1_based: int) -> bool:
+    tasks = load_tasks()
+    if 1 <= index_1_based <= len(tasks):
+        tasks[index_1_based - 1]["done"] = True
+        save_tasks(tasks)
+        return True
+    return False
+
+
+def delete_task(index_1_based: int) -> bool:
+    tasks = load_tasks()
+    if 1 <= index_1_based <= len(tasks):
+        tasks.pop(index_1_based - 1)
+        save_tasks(tasks)
+        return True
+    return False
+
+
+def clear_tasks():
+    save_tasks([])
+
+
+# ---- Reminders ----
+REMINDERS_FILE = "reminders.json"
+
+
+def load_reminders() -> list[dict]:
+    if not os.path.exists(REMINDERS_FILE):
+        return []
+    with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_reminders(reminders: list[dict]):
+    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reminders, f, indent=2)
+
+
+def parse_time_string(time_str: str):
+    time_str = time_str.strip().lower().replace(".", "")
+    formats_to_try = ["%I:%M %p", "%I %p", "%H:%M", "%I:%M%p", "%I%p"]
+    for fmt in formats_to_try:
+        try:
+            parsed_time = datetime.strptime(time_str, fmt)
+            now = datetime.now()
+            candidate = now.replace(
+                hour=parsed_time.hour, minute=parsed_time.minute,
+                second=0, microsecond=0,
+            )
+            if candidate <= now:
+                candidate += timedelta(days=1)
+            return candidate
+        except ValueError:
+            continue
+    return None
+
+
+def add_reminder(text: str, time_str: str):
+    remind_at = parse_time_string(time_str)
+    if remind_at is None:
+        return None
+    reminders = load_reminders()
+    reminders.append({"text": text, "remind_at": remind_at.isoformat(), "notified": False})
+    save_reminders(reminders)
+    return remind_at
+
+
+def check_due_reminders() -> list[str]:
+    reminders = load_reminders()
+    due_texts = []
+    now = datetime.now()
+    changed = False
+    for reminder in reminders:
+        if not reminder["notified"]:
+            remind_at = datetime.fromisoformat(reminder["remind_at"])
+            if now >= remind_at:
+                due_texts.append(reminder["text"])
+                reminder["notified"] = True
+                changed = True
+    if changed:
+        save_reminders(reminders)
+    return due_texts
+
+
+def clear_reminders():
+    save_reminders([])
+
+
+# ---- Habit Tracking ----
+HABITS_FILE = "habits.json"
+
+
+def load_habits() -> dict:
+    if not os.path.exists(HABITS_FILE):
+        return {}
+    with open(HABITS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_habits(habits: dict):
+    with open(HABITS_FILE, "w", encoding="utf-8") as f:
+        json.dump(habits, f, indent=2)
+
+
+def add_habit(name: str):
+    habits = load_habits()
+    if name not in habits:
+        habits[name] = []
+        save_habits(habits)
+
+
+def log_habit(name: str) -> bool:
+    habits = load_habits()
+    if name not in habits:
+        return False
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today not in habits[name]:
+        habits[name].append(today)
+        save_habits(habits)
+    return True
+
+
+def calculate_streak(name: str, habits: dict) -> int:
+    completed_dates = set(habits.get(name, []))
+    streak = 0
+    check_date = datetime.now().date()
+    if check_date.strftime("%Y-%m-%d") not in completed_dates:
+        check_date -= timedelta(days=1)
+    while check_date.strftime("%Y-%m-%d") in completed_dates:
+        streak += 1
+        check_date -= timedelta(days=1)
+    return streak
+
+
+def list_habits_text() -> str:
+    habits = load_habits()
+    if not habits:
+        return "You have no habits being tracked yet."
+    lines = []
+    for name in habits:
+        streak = calculate_streak(name, habits)
+        lines.append(f"{name}: {streak} day streak")
+    return "Here are your habits: " + "; ".join(lines)
 
 
 # ---- Daily Proactive Briefing ----
@@ -210,19 +390,13 @@ def speak(text: str):
     """Generate speech audio for the given text and play it in the browser."""
     voice_id = VOICE_OPTIONS[st.session_state.selected_voice_name]
     # Unique filename each time, so the browser doesn't cache/replay old audio
-    output_path = f"reply_{uuid.uuid4().hex[:8]}.mp3"
+    output_path = f"reply_{hash(text) % 100000}.mp3"
     asyncio.run(_generate_speech_file(text, voice_id, output_path))
 
-    # Clean up ALL old reply files, not just the one from this session.
-    # (session_state resets on refresh/restart/new tab, so tracking only
-    # "the previous file" left orphans behind every time that happened.)
-    for old_file in glob.glob("reply_*.mp3"):
-        if old_file != output_path:
-            try:
-                os.remove(old_file)
-            except OSError:
-                pass  # file may be mid-playback or already gone; skip it
-
+    # Clean up the previous reply file so they don't pile up on disk
+    previous_path = st.session_state.get("last_reply_audio_path")
+    if previous_path and previous_path != output_path and os.path.exists(previous_path):
+        os.remove(previous_path)
     st.session_state.last_reply_audio_path = output_path
 
     st.audio(output_path, autoplay=True)
@@ -435,6 +609,136 @@ if user_input:
         start_pomodoro_phase("work", minutes)
 
         confirmation = f"Starting a {minutes}-minute Pomodoro session. I'll walk you through the breaks too."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    # ---- To-Do List commands ----
+    elif lowered.startswith("add task ") or lowered.startswith("add a task "):
+        task_text = user_input.split("task ", 1)[1].strip()
+        add_task(task_text)
+        confirmation = f"Added to your list: {task_text}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif "my tasks" in lowered or "my to-do" in lowered or "my todo" in lowered:
+        summary = list_tasks_text()
+        with st.chat_message("assistant"):
+            st.markdown(summary)
+            speak(summary)
+        active_history.append({"role": "assistant", "content": summary})
+
+    elif lowered.startswith("complete task ") or lowered.startswith("finish task "):
+        number_part = user_input.split(" ")[-1]
+        if number_part.isdigit() and complete_task(int(number_part)):
+            confirmation = f"Marked task {number_part} as done."
+        else:
+            confirmation = f"I couldn't find task {number_part}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif lowered.startswith("delete task ") or lowered.startswith("remove task "):
+        number_part = user_input.split(" ")[-1]
+        if number_part.isdigit() and delete_task(int(number_part)):
+            confirmation = f"Deleted task {number_part}."
+        else:
+            confirmation = f"I couldn't find task {number_part}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    # ---- Reminder commands ----
+    elif re.match(r"remind me to (.+) at (.+)", lowered):
+        reminder_match = re.match(r"remind me to (.+) at (.+)", lowered)
+        task_text = reminder_match.group(1).strip()
+        time_text = reminder_match.group(2).strip()
+        scheduled = add_reminder(task_text, time_text)
+        if scheduled:
+            confirmation = f"Okay, I'll remind you to {task_text} at {scheduled.strftime('%I:%M %p')}."
+        else:
+            confirmation = f"I couldn't understand the time '{time_text}'. Try something like '6 pm' or '6:30 pm'."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    # ---- Habit tracking commands ----
+    elif lowered.startswith("add habit "):
+        habit_name = user_input.split(" ", 2)[2].strip()
+        add_habit(habit_name)
+        confirmation = f"I'll start tracking your habit: {habit_name}."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif lowered.startswith("log habit "):
+        habit_name = user_input.split(" ", 2)[2].strip()
+        if log_habit(habit_name):
+            habits = load_habits()
+            streak = calculate_streak(habit_name, habits)
+            confirmation = f"Logged {habit_name} for today. Current streak: {streak} days."
+        else:
+            confirmation = f"I don't have a habit called {habit_name} yet. Try 'add habit {habit_name}' first."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif "my habits" in lowered or "my streaks" in lowered:
+        summary = list_habits_text()
+        with st.chat_message("assistant"):
+            st.markdown(summary)
+            speak(summary)
+        active_history.append({"role": "assistant", "content": summary})
+
+    # ---- Delete/clear commands ----
+    elif lowered in ("delete everything", "clear everything", "forget everything"):
+        clear_memory()
+        clear_tasks()
+        clear_reminders()
+        save_habits({})
+        for persona_name in PERSONAS:
+            st.session_state.chat_histories[persona_name][0] = {
+                "role": "system",
+                "content": build_system_prompt(persona_name),
+            }
+        confirmation = "I've cleared your memory, tasks, reminders, and habits."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif lowered in ("delete memory", "clear memory"):
+        clear_memory()
+        for persona_name in PERSONAS:
+            st.session_state.chat_histories[persona_name][0] = {
+                "role": "system",
+                "content": build_system_prompt(persona_name),
+            }
+        confirmation = "I've cleared everything I remembered about you."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif lowered in ("delete reminders", "clear reminders"):
+        clear_reminders()
+        confirmation = "I've cleared all your reminders."
+        with st.chat_message("assistant"):
+            st.markdown(confirmation)
+            speak(confirmation)
+        active_history.append({"role": "assistant", "content": confirmation})
+
+    elif lowered in ("delete tasks", "clear tasks", "clear my to-do list"):
+        clear_tasks()
+        confirmation = "I've cleared your to-do list."
         with st.chat_message("assistant"):
             st.markdown(confirmation)
             speak(confirmation)
